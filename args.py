@@ -3,6 +3,8 @@ import pickle
 import time
 import argparse
 
+from google.auth import default
+
 
 def init_args():
     parser = init_parser()
@@ -10,27 +12,42 @@ def init_args():
     return init_sub_args(args)
 
 
-def init_sub_args(args):
-    dataset = "UBnormal" if args.dataset == "UBnormal" else "ShanghaiTech"
-    if args.vid_path_train and args.vid_path_test and args.pose_path_train and args.pose_path_test:
-        args.vid_path = {'train': args.vid_path_train,
-                         'test': args.vid_path_test}
+def init_sub_args(args, dataset):
+    default_dataset = 'HumanML3D'
+    if dataset == 'HumanML3D':
+        args.pose_path = {
+            'train': os.path.join(args.data_dir, dataset, 'train/'),
+            # 'test': {
+            #     'data': [
+            #         os.path.join(args.data_dir, 'ACMDM', 'train/'),
+            #     ],
+            #     'frame_label': [
+            #         os.path.join(args.data_dir, 'ACMDM', 'frame_label/')
+            #     ]
+            # },
+        }
+    elif dataset == 'ACMDM':
+        args.pose_path = {
+            # 'train': os.path.join(args.data_dir, dataset, 'train/'),
+            'test': {
+                'data':
+                    [
+                        os.path.join(args.data_dir, dataset, 'test/'),
+                    ],
+                'frame_label': [os.path.join(args.data_dir, dataset, 'frame_label/')],
+                'scores_path': os.path.join(args.data_dir, dataset, 'scores/')
+            },
+        }
 
-        args.pose_path = {'train': args.pose_path_train,
-                          'test': args.pose_path_test}
-    else:
-        args.vid_path = {'train': os.path.join(args.data_dir, dataset, 'train/images/'),
-                         'test':  os.path.join(args.data_dir, dataset, 'test/frames/')}
+    # few-shot
+    if dataset != 'HumanML3D':
+        args.batch_size = 5
 
-        args.pose_path = {'train': os.path.join(args.data_dir, dataset, 'pose', 'train/'),
-                          'test':  os.path.join(args.data_dir, dataset, 'pose', 'test/')}
-    args.pose_path["train_abnormal"] = args.pose_path_train_abnormal
-    args.ckpt_dir = None
     model_args = args_rm_prefix(args, 'model_')
     return args, model_args
 
 
-def init_parser(default_data_dir='data/', default_exp_dir='data/exp_dir'):
+def init_parser(default_data_dir='/home/hdd1/sunao', default_exp_dir='/home/sunao/STG-NF/experiment'):
     parser = argparse.ArgumentParser(prog="STG-NF")
     # General Args
     parser.add_argument('--vid_path_train', type=str, default=None, help='Path to training vids')
@@ -38,38 +55,54 @@ def init_parser(default_data_dir='data/', default_exp_dir='data/exp_dir'):
     parser.add_argument('--pose_path_train', type=str, default=None, help='Path to training pose')
     parser.add_argument('--vid_path_test', type=str, default=None, help='Path to test vids')
     parser.add_argument('--pose_path_test', type=str, default=None, help='Path to test pose')
-    parser.add_argument('--dataset', type=str, default='ShanghaiTech',
-                        choices=['ShanghaiTech', 'ShanghaiTech-HR', 'UBnormal'], help='Dataset for Eval')
+    # parser.add_argument('--dataset', type=str, default='ShanghaiTech',
+    #                     choices=['ShanghaiTech', 'ShanghaiTech-HR', 'UBnormal', 'HumanML3D'], help='Dataset for Eval')
     parser.add_argument('--vid_res', type=str, default=None, help='Video Res')
-    parser.add_argument('--device', type=str, default='cuda:0', metavar='DEV', help='Device for feature calculation (default: \'cuda:0\')')
-    parser.add_argument('--seed', type=int, metavar='S', default=999, help='Random seed, use 999 for random (default: 999)')
-    parser.add_argument('--verbose', type=int, default=1, metavar='V', choices=[0, 1], help='Verbosity [1/0] (default: 1)')
-    parser.add_argument('--data_dir', type=str, default=default_data_dir, metavar='DATA_DIR', help="Path to directory holding .npy and .pkl files (default: {})".format(default_data_dir))
-    parser.add_argument('--exp_dir', type=str, default=default_exp_dir, metavar='EXP_DIR', help="Path to the directory where models will be saved (default: {})".format(default_exp_dir))
-    parser.add_argument('--num_workers', type=int, default=8, metavar='W', help='number of dataloader workers (0=current thread) (default: 32)')
+    parser.add_argument('--device', type=str, default='cuda:0', metavar='DEV',
+                        help='Device for feature calculation (default: \'cuda:0\')')
+    parser.add_argument('--seed', type=int, metavar='S', default=999,
+                        help='Random seed, use 999 for random (default: 999)')
+    parser.add_argument('--verbose', type=int, default=1, metavar='V', choices=[0, 1],
+                        help='Verbosity [1/0] (default: 1)')
+    parser.add_argument('--data_dir', type=str, default=default_data_dir, metavar='DATA_DIR',
+                        help="Path to directory holding .npy and .pkl files (default: {})".format(default_data_dir))
+    parser.add_argument('--exp_dir', type=str, default=default_exp_dir, metavar='EXP_DIR',
+                        help="Path to the directory where models will be saved (default: {})".format(default_exp_dir))
+    parser.add_argument('--num_workers', type=int, default=8, metavar='W',
+                        help='number of dataloader workers (0=current thread) (default: 32)')
     parser.add_argument('--plot_vid', type=int, default=0, help='Plot test videos')
     parser.add_argument('--only_test', action='store_true', help='Visualize train/test data')
 
     # Data Params
-    parser.add_argument('--num_transform', type=int, default=2, metavar='T', help='number of transformations to use for augmentation (default: 2)')
-    parser.add_argument('--headless', action='store_true', help='Remove head keypoints (14-17) and use 14 kps only. (default: False)')
-    parser.add_argument('--norm_scale', '-ns', type=int, default=0, metavar='NS', choices=[0, 1], help='Scale without keeping proportions [1/0] (default: 0)')
-    parser.add_argument('--prop_norm_scale', '-pns', type=int, default=1, metavar='PNS', choices=[0, 1], help='Scale keeping proportions [1/0] (default: 1)')
-    parser.add_argument('--train_seg_conf_th', '-th', type=float, default=0.0, metavar='CONF_TH', help='Training set threshold Parameter (default: 0.0)')
-    parser.add_argument('--seg_len', type=int, default=24, metavar='SGLEN', help='Number of frames for training segment sliding window, a multiply of 6 (default: 12)')
-    parser.add_argument('--seg_stride', type=int, default=6, metavar='SGST', help='Stride for training segment sliding window')
+    parser.add_argument('--num_transform', type=int, default=2, metavar='T',
+                        help='number of transformations to use for augmentation (default: 2)')
+    parser.add_argument('--headless', action='store_true',
+                        help='Remove head keypoints (14-17) and use 14 kps only. (default: False)')
+    parser.add_argument('--norm_scale', '-ns', type=int, default=0, metavar='NS', choices=[0, 1],
+                        help='Scale without keeping proportions [1/0] (default: 0)')
+    parser.add_argument('--prop_norm_scale', '-pns', type=int, default=1, metavar='PNS', choices=[0, 1],
+                        help='Scale keeping proportions [1/0] (default: 1)')
+    parser.add_argument('--train_seg_conf_th', '-th', type=float, default=0.0, metavar='CONF_TH',
+                        help='Training set threshold Parameter (default: 0.0)')
+    parser.add_argument('--seg_len', type=int, default=24, metavar='SGLEN',
+                        help='Number of frames for training segment sliding window, a multiply of 6 (default: 12)')
+    parser.add_argument('--seg_stride', type=int, default=6, metavar='SGST',
+                        help='Stride for training segment sliding window')
     parser.add_argument('--specific_clip', type=int, default=None, help='Train and Eval on Specific Clip')
     parser.add_argument('--global_pose_segs', action='store_false', help='Use unormalized pose segs')
 
     # Model Params
     parser.add_argument('--checkpoint', type=str, metavar='model', help="Path to a pretrained model")
-    parser.add_argument('--batch_size', type=int, default=256,  metavar='B', help='Batch size for train')
-    parser.add_argument('--epochs', '-model_e', type=int, default=8, metavar='E', help = 'Number of epochs per cycle')
-    parser.add_argument('--model_optimizer', '-model_o', type=str, default='adamx', metavar='model_OPT', help = "Optimizer")
-    parser.add_argument('--model_sched', '-model_s', type=str, default='exp_decay', metavar='model_SCH', help = "Optimization LR scheduler")
+    parser.add_argument('--batch_size', type=int, default=4096, metavar='B', help='Batch size for train')
+    parser.add_argument('--model_optimizer', '-model_o', type=str, default='adamx', metavar='model_OPT',
+                        help="Optimizer")
+    parser.add_argument('--model_sched', '-model_s', type=str, default='exp_decay', metavar='model_SCH',
+                        help="Optimization LR scheduler")
     parser.add_argument('--model_lr', type=float, default=5e-4, metavar='LR', help='Optimizer Learning Rate Parameter')
-    parser.add_argument('--model_weight_decay', '-model_wd', type=float, default=5e-5, metavar='WD', help='Optimizer Weight Decay Parameter')
-    parser.add_argument('--model_lr_decay', '-model_ld', type=float, default=0.99, metavar='LD', help='Optimizer Learning Rate Decay Parameter')
+    parser.add_argument('--model_weight_decay', '-model_wd', type=float, default=5e-5, metavar='WD',
+                        help='Optimizer Weight Decay Parameter')
+    parser.add_argument('--model_lr_decay', '-model_ld', type=float, default=0.99, metavar='LD',
+                        help='Optimizer Learning Rate Decay Parameter')
     parser.add_argument('--model_hidden_dim', type=int, default=0, help='Features dim dimension')
     parser.add_argument('--model_confidence', action='store_true', help='Create Figs')
     parser.add_argument('--K', type=int, default=8, help='Features dim dimension')
@@ -81,6 +114,15 @@ def init_parser(default_data_dir='data/', default_exp_dir='data/exp_dir'):
     parser.add_argument('--adj_strategy', type=str, default='uniform', help='Adjacency matrix strategy')
     parser.add_argument('--max_hops', type=int, default=8, help='Adjacency matrix neighbours')
 
+    # Incremental Task Params
+    parser.add_argument('--epochs', type=int, default=50, help='Initial Task Number of epochs per cycle')
+    parser.add_argument('--incremental_epochs', type=int, default=20,
+                        help='Incremental Task Number of epochs per cycle')
+    # parser.add_argument('--num_tasks', type=int, default=2, help='Total Task Number')
+    parser.add_argument('--save_freq', type=int, default=10, help='save checkpoint frequence')
+    parser.add_argument('--load_pretrained_checkpoint', type=str,
+                        default='/home/sunao/STG-NF/experiment/pretrained/task_0/epoch_50_checkpoint.pth.tar',
+                        help='load Task0 checkpoint')
     return parser
 
 
@@ -120,4 +162,3 @@ def save_dataset(dataset, fname):
 def load_dataset(fname):
     with open(fname, 'rb') as file:
         return pickle.load(file)
-

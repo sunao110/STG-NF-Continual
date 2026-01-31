@@ -21,6 +21,7 @@ from models.STG_NF.utils import split_feature
 from models.STG_NF.graph import Graph
 from models.STG_NF.stgcn import st_gcn
 
+
 def nan_throw(tensor, name="tensor"):
     stop = False
     if ((tensor != tensor).any()):
@@ -387,6 +388,8 @@ class STG_NF(nn.Module):
 
         # Full objective - converted to bits per dimension
         nll = (-objective) / (math.log(2.0) * c * t * v)
+        # 将nll映射到0-1之间，使用sigmoid函数
+        # nll = torch.sigmoid(nll)
 
         return z, nll
 
@@ -402,3 +405,44 @@ class STG_NF(nn.Module):
         for name, m in self.named_modules():
             if isinstance(m, ActNorm2d):
                 m.inited = True
+
+
+if __name__ == '__main__':
+    # 初始化模型参数
+    pose_shape = (3, 24, 22)  # C, T, V
+    hidden_channels = 0
+    K = 8
+    L = 1
+    actnorm_scale = 1.0
+    flow_permutation = "permute"
+    flow_coupling = "affine"
+    LU_decomposed = True
+    learn_top = False
+    R = 3
+    edge_importance = False
+    temporal_kernel_size = None
+    strategy = 'uniform'
+    max_hops = 8
+    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+
+    # 创建模型实例
+    model = STG_NF(
+        pose_shape=pose_shape,
+        hidden_channels=hidden_channels,
+        K=K,
+        L=L,
+        actnorm_scale=actnorm_scale,
+        flow_permutation=flow_permutation,
+        flow_coupling=flow_coupling,
+        LU_decomposed=LU_decomposed,
+        learn_top=learn_top,
+        R=R,
+        edge_importance=edge_importance,
+        temporal_kernel_size=temporal_kernel_size,
+        strategy=strategy,
+        max_hops=max_hops,
+        device=device
+    ).to(device)
+
+    for name, param in model.named_parameters():
+        print(f"模块名:{name}, 参数形状:{param.shape}")

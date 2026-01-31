@@ -84,7 +84,7 @@ def main():
             run_pose = False
             if args.video and name.endswith(".mp4") or name.endswith("avi"):
                 video_filename = os.path.join(path, name)
-                video_basename = basename(video_filename)[:-4]
+                video_basename = basename(video_filename)[:-4]  # 000014
                 run_pose = True
             elif name.endswith(".jpg") or name.endswith(".png"):
                 if path not in img_dirs:
@@ -94,9 +94,12 @@ def main():
                     run_pose = True
             if run_pose:
                 # Rename constants
+                # 模型返回的默认文件名
                 alphapose_orig_results_filename = 'alphapose-results.json'
-                alphapose_tracked_results_filename = video_basename + '_alphapose_tracked_person.json'
-                alphapose_results_filename = video_basename + '_alphapose-results.json'
+                # 重构后的文件名
+                alphapose_tracked_results_filename = video_basename + '_alphapose_tracked_person.json' # '000014_alphapose_tracked_person.json'
+                # 默认文件名改为带视频文件名，防止重复覆盖
+                alphapose_results_filename = video_basename + '_alphapose-results.json' # '000014_alphapose-results.json'
                 print(alphapose_results_filename)
                 if alphapose_results_filename in output_files:
                     continue

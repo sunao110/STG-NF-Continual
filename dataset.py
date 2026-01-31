@@ -49,10 +49,12 @@ class PoseSegDataset(Dataset):
         self.train_seg_conf_th = dataset_args.get('train_seg_conf_th', 0.0)
         self.seg_len = dataset_args.get('seg_len', 12)
         self.seg_stride = dataset_args.get('seg_stride', 1)
+        #############################################
         self.segs_data_np, self.segs_meta, self.person_keys, self.global_data_np, \
         self.global_data, self.segs_score_np = \
             gen_dataset(path_to_json_dir, num_clips=num_clips, ret_keys=True,
                         ret_global_data=return_global, **dataset_args)
+        #############################################
         self.segs_meta = np.array(self.segs_meta)
         if abnormal_train_path is not None:
             self.segs_data_np_ab, self.segs_meta_ab, self.person_keys_ab, self.global_data_np_ab, \

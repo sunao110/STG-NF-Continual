@@ -5,6 +5,7 @@ from scipy.ndimage import gaussian_filter1d
 from sklearn.metrics import roc_auc_score
 from tqdm import tqdm
 from dataset import shanghaitech_hr_skip
+from utils.draw_utils import plot_score_curve
 
 
 class bcolors:
@@ -19,39 +20,40 @@ class bcolors:
     UNDERLINE = '\033[4m'
 
 
-def score_dataset(score, metadata, args=None):
-    gt_arr, scores_arr = get_dataset_scores(score, metadata, args=args)
-    scores_arr = smooth_scores(scores_arr)
-    gt_np = np.concatenate(gt_arr)
-    scores_np = np.concatenate(scores_arr)
-    auc = score_auc(scores_np, gt_np)
-    return auc, scores_np
+def score_dataset(score, metadata, args=None, only_test=False):
+    gt_arr, scores_arr = get_dataset_scores(score, metadata, args=args, only_test=only_test)
+
+    if not only_test:
+        scores_arr = smooth_scores(scores_arr)
+        gt_np = np.concatenate(gt_arr)
+        scores_np = np.concatenate(scores_arr)
+        auc = score_auc(scores_np, gt_np)
+        return auc, scores_np
+
+    return None, None
 
 
-def get_dataset_scores(scores, metadata, args=None):
+
+def get_dataset_scores(scores, metadata, args=None, only_test=False):
     dataset_gt_arr = []
     dataset_scores_arr = []
     metadata_np = np.array(metadata)
 
-    if args.dataset == 'UBnormal':
-        pose_segs_root = 'data/UBnormal/pose/test'
-        clip_list = os.listdir(pose_segs_root)
-        clip_list = sorted(
-            fn.replace("alphapose_tracked_person.json", "tracks.txt") for fn in clip_list if fn.endswith('.json'))
-        per_frame_scores_root = 'data/UBnormal/gt/'
-    else:
-        per_frame_scores_root = 'data/ShanghaiTech/gt/test_frame_mask/'
-        clip_list = os.listdir(per_frame_scores_root)
-        clip_list = sorted(fn for fn in clip_list if fn.endswith('.npy'))
+    per_frame_scores_root = args.pose_path['test']['frame_label'][0] if not only_test else None
+    npy_files = [f for f in os.listdir(args.pose_path['test']['data'][0]) if f.lower().endswith('.npy')]
+    # 排序保证测试集文件加载的顺序相同
+    clip_list = sorted(fn for fn in npy_files if fn.endswith('.npy'))
 
     print("Scoring {} clips".format(len(clip_list)))
     for clip in tqdm(clip_list):
-        clip_gt, clip_score = get_clip_score(scores, clip, metadata_np, metadata, per_frame_scores_root, args)
-        if clip_score is not None:
+        clip_gt, clip_score = get_clip_score(scores, clip, metadata_np, metadata, per_frame_scores_root, args, 196)
+        if clip_gt is not None:
             dataset_gt_arr.append(clip_gt)
+        if clip_score is not None:
             dataset_scores_arr.append(clip_score)
 
     scores_np = np.concatenate(dataset_scores_arr, axis=0)
+    # 替换无穷值为当前tensor元素的最值，防止后续？AUC计算出错
     scores_np[scores_np == np.inf] = scores_np[scores_np != np.inf].max()
     scores_np[scores_np == -1 * np.inf] = scores_np[scores_np != -1 * np.inf].min()
     index = 0
@@ -76,39 +78,29 @@ def smooth_scores(scores_arr, sigma=7):
             scores_arr[s] = gaussian_filter1d(scores_arr[s], sigma=sig)
     return scores_arr
 
+# 取同一场景下的最低分数person作为该样本的score
+def get_clip_score(scores, clip, metadata_np, metadata, per_frame_scores_root, args, n_frames):
+    order = int(os.path.splitext(os.path.basename(clip))[0])
+    # 归属同一文件的样本帧序号，用于拼接
+    score_inds = np.where(metadata_np[:, 0] == order)[0]
+    pid_scores = scores[score_inds]
+    # 标签
+    if per_frame_scores_root is not None:
+        clip_res_fn = os.path.join(per_frame_scores_root, clip)
+        clip_gt = np.load(clip_res_fn)
+        clip_score = np.ones(clip_gt.shape[0]) * np.inf
 
-def get_clip_score(scores, clip, metadata_np, metadata, per_frame_scores_root, args):
-    if args.dataset == 'UBnormal':
-        type, scene_id, clip_id = re.findall('(abnormal|normal)_scene_(\d+)_scenario(.*)_tracks.*', clip)[0]
-        clip_id = type + "_" + clip_id
-    else:
-        scene_id, clip_id = [int(i) for i in clip.replace("label", "001").split('.')[0].split('_')]
-        if shanghaitech_hr_skip((args.dataset == 'ShanghaiTech-HR'), scene_id, clip_id):
-            return None, None
-    clip_metadata_inds = np.where((metadata_np[:, 1] == clip_id) &
-                                  (metadata_np[:, 0] == scene_id))[0]
-    clip_metadata = metadata[clip_metadata_inds]
-    clip_fig_idxs = set([arr[2] for arr in clip_metadata])
-    clip_res_fn = os.path.join(per_frame_scores_root, clip)
-    clip_gt = np.load(clip_res_fn)
-    if args.dataset != "UBnormal":
-        clip_gt = np.ones(clip_gt.shape) - clip_gt  # 1 is normal, 0 is abnormal
-    scores_zeros = np.ones(clip_gt.shape[0]) * np.inf
-    if len(clip_fig_idxs) == 0:
-        clip_person_scores_dict = {0: np.copy(scores_zeros)}
-    else:
-        clip_person_scores_dict = {i: np.copy(scores_zeros) for i in clip_fig_idxs}
+        pid_frame_inds = np.array([metadata[i][1] for i in score_inds]).astype(int)
+        clip_score[pid_frame_inds + int(args.seg_len / 2)] = pid_scores
+        return clip_gt, clip_score
 
-    for person_id in clip_fig_idxs:
-        person_metadata_inds = \
-            np.where(
-                (metadata_np[:, 1] == clip_id) & (metadata_np[:, 0] == scene_id) & (metadata_np[:, 2] == person_id))[0]
-        pid_scores = scores[person_metadata_inds]
+    # 绘制图像
+    plot_score_curve(pid_scores, f"score_curve_{order}.png", offset=int(args.seg_len / 2))
+    # 保存每一帧的得分
+    if args.pose_path['test']['scores_path']:
+        save_scores = np.zeros(n_frames)
+        frame_inds = np.arange(pid_scores.shape[0]).astype(int)
+        save_scores[frame_inds + int(args.seg_len / 2)] = pid_scores
+        np.save(os.path.join(args.pose_path['test']['scores_path'], f"{order}.npy"), save_scores)
 
-        pid_frame_inds = np.array([metadata[i][3] for i in person_metadata_inds]).astype(int)
-        clip_person_scores_dict[person_id][pid_frame_inds + int(args.seg_len / 2)] = pid_scores
-
-    clip_ppl_score_arr = np.stack(list(clip_person_scores_dict.values()))
-    clip_score = np.amin(clip_ppl_score_arr, axis=0)
-
-    return clip_gt, clip_score
+    return None, None

@@ -76,6 +76,7 @@ def gen_clip_seg_data_np(clip_dict, start_ofst=0, seg_stride=4, seg_len=12, scen
         else:
             key = ('{:02d}_{:04d}_{:02d}'.format(int(scene_id), int(clip_id), int(idx)))
         person_keys[key] = sing_pose_keys
+        # 按照指定的长度分割成多个样本(259, 17, 3) -> (40, 24, 17, 3)
         curr_pose_segs_np, curr_pose_segs_meta, curr_pose_score_np = split_pose_to_segments(sing_pose_np,
                                                                                             sing_pose_meta,
                                                                                             sing_pose_keys,
@@ -105,6 +106,35 @@ def gen_clip_seg_data_np(clip_dict, start_ofst=0, seg_stride=4, seg_len=12, scen
         return pose_segs_data_np, pose_segs_meta, global_pose_data_np, global_pose_data, score_segs_data_np
 
 
+def gen_clip_seg_data_np_for_humanml3d_test(data_npy, start_ofst=0, seg_stride=4, seg_len=12, order=0):
+    """
+    Generate an array of segmented sequences, each object is a segment and a corresponding metadata array
+    """
+    pose_segs_data = []
+    pose_segs_meta = []
+    # 按照指定的长度分割成多个样本(259, 17, 3) -> (40, 24, 17, 3)
+    curr_pose_segs_np, curr_pose_segs_meta = split_pose_to_segments_for_humanml3d_test(data_npy, start_ofst, seg_stride,
+                                                                                      seg_len, order)
+    pose_segs_data.append(curr_pose_segs_np)
+    pose_segs_data_np = np.concatenate(pose_segs_data, axis=0)
+    pose_segs_meta += curr_pose_segs_meta
+
+    return pose_segs_data_np, pose_segs_meta
+
+
+def gen_clip_seg_data_np_for_humanml3d(data_npy, start_ofst=0, seg_stride=4, seg_len=12, ):
+    """
+    Generate an array of segmented sequences, each object is a segment and a corresponding metadata array
+    """
+    pose_segs_data = []
+    # 按照指定的长度分割成多个样本(259, 17, 3) -> (40, 24, 17, 3)
+    curr_pose_segs_np = split_pose_to_segments_for_humanml3d(data_npy, start_ofst, seg_stride, seg_len, )
+    pose_segs_data.append(curr_pose_segs_np)
+    pose_segs_data_np = np.concatenate(pose_segs_data, axis=0)
+
+    return pose_segs_data_np
+
+
 def single_pose_dict2np(person_dict, idx):
     single_person = person_dict[str(idx)]
     sing_pose_np = []
@@ -122,6 +152,7 @@ def single_pose_dict2np(person_dict, idx):
         sing_scores_np.append(single_person[key]['scores'])
     sing_pose_np = np.stack(sing_pose_np, axis=0)
     sing_scores_np = np.stack(sing_scores_np, axis=0)
+    # (234, 17, 3) 单个样本  元信息         每帧的key             每帧得分
     return sing_pose_np, sing_pose_meta, single_person_dict_keys, sing_scores_np
 
 
@@ -179,3 +210,37 @@ def split_pose_to_segments(single_pose_np, single_pose_meta, single_pose_keys, s
                 pose_segs_meta.append([int(scene_id), int(clip_id), int(single_pose_meta[0]), int(start_key)])
     return pose_segs_np, pose_segs_meta, pose_score_np
 
+
+def split_pose_to_segments_for_humanml3d_test(single_pose_np, start_ofst=0, seg_dist=6,
+                                              seg_len=12, order=0):
+    t, n_joint, joint_dim = single_pose_np.shape
+    pose_segs_np = np.empty([0, seg_len, n_joint, joint_dim])
+    pose_segs_meta = []
+
+    num_segs = np.ceil((t - seg_len) / seg_dist).astype(np.int)
+    single_pose_keys_sorted = sorted([i for i in range(t)])  # , key=lambda x: int(x))
+
+    for seg_ind in range(num_segs):
+        start_ind = start_ofst + seg_ind * seg_dist
+        if start_ind + seg_len <= t:
+            curr_segment = single_pose_np[start_ind:start_ind + seg_len].reshape(1, seg_len, n_joint, joint_dim)
+            pose_segs_np = np.append(pose_segs_np, curr_segment, axis=0)
+            pose_segs_meta.append([order, single_pose_keys_sorted[start_ind]])
+
+    return pose_segs_np, pose_segs_meta
+
+
+def split_pose_to_segments_for_humanml3d(single_pose_np, start_ofst=0, seg_dist=6,
+                                         seg_len=12, ):
+    t, n_joint, joint_dim = single_pose_np.shape
+    pose_segs_np = np.empty([0, seg_len, n_joint, joint_dim])
+
+    num_segs = np.ceil((t - seg_len) / seg_dist).astype(np.int)
+
+    for seg_ind in range(num_segs):
+        start_ind = start_ofst + seg_ind * seg_dist
+        if start_ind + seg_len <= t:
+            curr_segment = single_pose_np[start_ind:start_ind + seg_len].reshape(1, seg_len, n_joint, joint_dim)
+            pose_segs_np = np.append(pose_segs_np, curr_segment, axis=0)
+
+    return pose_segs_np

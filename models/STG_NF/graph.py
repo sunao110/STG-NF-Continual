@@ -26,7 +26,7 @@ class Graph:
     """
 
     def __init__(self,
-                 layout='openpose',
+                 layout='humanML3D',
                  strategy='spatial',
                  headless=False,
                  max_hop=1):
@@ -72,6 +72,35 @@ class Graph:
             neighbor_link = [(i - 1, j - 1) for (i, j) in neighbor_1base]
             self.edge = self_link + neighbor_link
             self.center = 21 - 1
+
+        elif layout == 'humanML3D':
+            self.num_node = 22
+            self_link = [(i, i) for i in range(self.num_node)]
+            neighbor_link = [
+                (0, 3),
+                (3, 6),
+                (6, 9),
+                (9, 12),
+                (12, 15),
+                (0, 2),
+                (2, 5),
+                (5, 8),
+                (8, 11),
+                (0, 1),
+                (1, 4),
+                (4, 7),
+                (7, 10),
+                (9, 14),
+                (14, 17),
+                (17, 19),
+                (19, 21),
+                (9, 13),
+                (13, 16),
+                (16, 18),
+                (18, 20)
+            ]
+            self.edge = self_link + neighbor_link
+            self.center = 1
 
         else:
             raise ValueError("Do Not Exist This Layout.")

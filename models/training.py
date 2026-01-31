@@ -9,6 +9,8 @@ import torch
 import torch.optim as optim
 from tqdm import tqdm
 
+from utils.scoring_utils import smooth_scores, score_auc
+
 
 def adjust_lr(optimizer, epoch, lr=None, lr_decay=None, scheduler=None):
     if scheduler is not None:
@@ -71,7 +73,13 @@ class Trainer:
     def adjust_lr(self, epoch):
         return adjust_lr(self.optimizer, epoch, self.args.model_lr, self.args.model_lr_decay, self.scheduler)
 
-    def save_checkpoint(self, epoch, is_best=False, filename=None):
+    def optimizer_to_cuda(self, rank):
+        for state in self.optimizer.state.values():
+            for k, v in state.items():
+                if torch.is_tensor(v):
+                    state[k] = v.cuda(rank)
+
+    def save_checkpoint(self, epoch, is_best=False, filename=None, task=None):
         """
         state: {'epoch': cur_epoch + 1, 'state_dict': self.model.state_dict(),
                             'optimizer': self.optimizer.state_dict()}
@@ -81,17 +89,22 @@ class Trainer:
             filename = 'checkpoint.pth.tar'
 
         state['args'] = self.args
+        # 增量任务断点目录
+        task_dir = os.path.join(self.args.ckpt_dir, 'task_' + str(task))
+        if not os.path.exists(task_dir):
+            os.makedirs(task_dir)
 
-        path_join = os.path.join(self.args.ckpt_dir, filename)
+        path_join = os.path.join(task_dir, filename)
         torch.save(state, path_join)
+
         if is_best:
-            shutil.copy(path_join, os.path.join(self.args.ckpt_dir, 'checkpoint_best.pth.tar'))
+            shutil.copy(path_join, os.path.join(task_dir, 'checkpoint_best.pth.tar'))
 
     def load_checkpoint(self, filename):
         filename = filename
         try:
             checkpoint = torch.load(filename)
-            self.start_epoch = checkpoint['epoch']
+            # self.start_epoch = checkpoint['epoch']
             self.model.load_state_dict(checkpoint['state_dict'], strict=False)
             self.model.set_actnorm_init()
             self.optimizer.load_state_dict(checkpoint['optimizer'])
@@ -100,39 +113,35 @@ class Trainer:
         except FileNotFoundError:
             print("No checkpoint exists from '{}'. Skipping...\n".format(self.args.ckpt_dir))
 
-    def train(self, log_writer=None, clip=100):
-        time_str = time.strftime("%b%d_%H%M_")
-        checkpoint_filename = time_str + '_checkpoint.pth.tar'
-        start_epoch = 0
-        num_epochs = self.args.epochs
+    def train(self, log_writer=None, clip=100, task=None, num_epochs=1):
+        checkpoint_filename = '_checkpoint.pth.tar'
+        start_epoch = 1
         self.model.train()
         self.model = self.model.to(self.args.device)
+        self.optimizer_to_cuda(self.args.device)
         key_break = False
-        for epoch in range(start_epoch, num_epochs):
+
+        for epoch in range(start_epoch, num_epochs + 1):
             if key_break:
                 break
-            print("Starting Epoch {} / {}".format(epoch + 1, num_epochs))
+
+            print("Starting Epoch {} / {}".format(epoch, num_epochs))
             pbar = tqdm(self.train_loader)
             for itern, data_arr in enumerate(pbar):
                 try:
                     data = [data.to(self.args.device, non_blocking=True) for data in data_arr]
-                    score = data[-2].amin(dim=-1)
                     label = data[-1]
-                    if self.args.model_confidence:
-                        samp = data[0]
-                    else:
-                        samp = data[0][:, :2]
-                    z, nll = self.model(samp.float(), label=label, score=score)
+                    samp = data[0]
+
+                    z, nll = self.model(samp.float(), label=label)
                     if nll is None:
                         continue
-                    if self.args.model_confidence:
-                        nll = nll * score
                     losses = compute_loss(nll, reduction="mean")["total_loss"]
                     losses.backward()
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip)
                     self.optimizer.step()
                     self.optimizer.zero_grad()
-                    pbar.set_description("Loss: {}".format(losses.item()))
+                    pbar.set_description(f"Loss: {losses.item():.4f}")
                     log_writer.add_scalar('NLL Loss', losses.item(), epoch * len(self.train_loader) + itern)
 
                 except KeyboardInterrupt:
@@ -144,9 +153,12 @@ class Trainer:
                     else:
                         exit(1)
 
-            self.save_checkpoint(epoch, filename=checkpoint_filename)
+            if (epoch % self.args.save_freq == 0) or (epoch == num_epochs):
+                self.save_checkpoint(epoch, filename='epoch_' + str(epoch) + checkpoint_filename, task=task)
+                print('Checkpoint Saved.')
+
             new_lr = self.adjust_lr(epoch)
-            print('Checkpoint Saved. New LR: {0:.3e}'.format(new_lr))
+            print('New LR: {0:.3e}'.format(new_lr))
 
     def test(self):
         self.model.eval()
@@ -156,15 +168,9 @@ class Trainer:
         print("Starting Test Eval")
         for itern, data_arr in enumerate(pbar):
             data = [data.to(self.args.device, non_blocking=True) for data in data_arr]
-            score = data[-2].amin(dim=-1)
-            if self.args.model_confidence:
-                samp = data[0]
-            else:
-                samp = data[0][:, :2]
+            samp = data[0]
             with torch.no_grad():
-                z, nll = self.model(samp.float(), label=torch.ones(data[0].shape[0]), score=score)
-            if self.args.model_confidence:
-                nll = nll * score
+                z, nll = self.model(samp.float())
             probs = torch.cat((probs, -1 * nll), dim=0)
         prob_mat_np = probs.cpu().detach().numpy().squeeze().copy(order='C')
         return prob_mat_np
